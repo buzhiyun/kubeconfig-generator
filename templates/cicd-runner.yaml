@@ -1,0 +1,35 @@
+# CI/CD Runner role template
+# Minimal permissions for GitLab/GitHub runner: update images, rollout, check status
+---
+kind: {{ROLE_KIND}}
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{USERNAME}}-cicd-runner
+  {{NAMESPACE_BLOCK}}
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+---
+kind: {{BINDING_KIND}}
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{USERNAME}}-cicd-runner-binding
+  {{NAMESPACE_BLOCK}}
+subjects:
+- kind: ServiceAccount
+  name: {{USERNAME}}
+  namespace: {{SA_NAMESPACE}}
+roleRef:
+  kind: {{ROLE_KIND}}
+  name: {{USERNAME}}-cicd-runner
+  apiGroup: rbac.authorization.k8s.io
