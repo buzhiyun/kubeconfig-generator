@@ -23,16 +23,16 @@ kubectl get pods
 ## 用法
 
 ```
-./kubeconfig-gen.sh -u <username> [-n <namespace>] {-r <role> | -c <yaml>} [-o <output>] [-d <duration>]
-./kubeconfig-gen.sh -u <username> --clean [-n <namespace>]
+./kubeconfig-gen.sh -u <username> [-n <ns1>,<ns2>,...] {-r <role> | -c <yaml>} [-o <output>] [-d <duration>]
+./kubeconfig-gen.sh -u <username> --clean [-n <ns1>,<ns2>,...]
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `-u` | 用户名，即 ServiceAccount 名称（必选） |
-| `-r` | 预设角色：`readonly` / `developer` / `operator` / `admin` |
+| `-r` | 预设角色：`readonly` / `developer` / `operator` / `admin` / `cicd-runner` |
 | `-c` | 自定义 RBAC YAML 文件路径 |
-| `-n` | 命名空间，省略则为集群级别权限 |
+| `-n` | 命名空间，逗号分隔支持多个，省略则为集群级别权限 |
 | `-o` | 输出文件路径，默认 `<username>-kubeconfig` |
 | `-d` | Token 有效期，默认 `8760h`（1 年） |
 | `--clean` | 清理该用户的 SA 和 RBAC 资源 |
@@ -55,7 +55,7 @@ kubectl get pods
 
 ### developer — 开发者
 
-应用工作loads完整读写，基础设施资源只读。
+应用工作负载完整读写，基础设施资源只读。
 
 在 readonly 基础上增加：
 - pods/exec, pods/portforward 完整权限
@@ -68,7 +68,6 @@ kubectl get pods
 
 在 developer 基础上增加：
 - daemonsets, controllerrevisions CRUD
-- jobs, cronjobs CRUD（developer 已有）
 - serviceaccounts CRUD
 - poddisruptionbudgets CRUD
 - nodes, persistentvolumes 只读
@@ -80,9 +79,37 @@ kubectl get pods
 
 命名空间级为 namespace admin，集群级为 cluster admin。
 
+### cicd-runner — CI/CD 流水线
+
+最小权限，仅支持更新镜像和查看部署状态。适合 GitLab Runner、GitHub Actions 等 CI/CD 场景。
+
+| 资源 | 权限 | 用途 |
+|------|------|------|
+| deployments | get, list, watch, patch, update | 更新镜像、rollout restart |
+| replicasets | get, list, watch | 查看 rollout 状态 |
+| pods, pods/log | get, list, watch | 排查部署问题 |
+| configmaps | get, list | 读取配置 |
+
+不能 delete/create 资源，只能 patch/update 已有的 Deployment。
+
 ## 示例
 
-### 命名空间级权限
+### 多命名空间权限
+
+`-n` 支持逗号分隔，为同一个用户在多个命名空间创建 Role + RoleBinding（不产生 ClusterRole）：
+
+```bash
+# CI/CD Runner 在 dev 和 stg1 都有更新镜像权限
+./kubeconfig-gen.sh -u gitlab-runner -n dev,stg1 -r cicd-runner
+
+# 开发者在多个环境有权限
+./kubeconfig-gen.sh -u dev-user -n dev,stg1 -r developer
+
+# 清理时使用相同的 -n 参数
+./kubeconfig-gen.sh -u gitlab-runner -n dev,stg1 --clean
+```
+
+### 单命名空间权限
 
 ```bash
 # 开发者，限定在 app-prod 命名空间
@@ -126,12 +153,13 @@ kubectl get pods
 ```bash
 # 删除用户的所有资源（SA、Role/ClusterRole、RoleBinding/ClusterRoleBinding）
 ./kubeconfig-gen.sh -u alice -n default --clean
+./kubeconfig-gen.sh -u gitlab-runner -n dev,stg1 --clean
 ```
 
 ## 工作原理
 
-1. **创建 ServiceAccount** — 在目标 namespace（默认 default）下创建 SA
-2. **配置 RBAC** — 根据角色模板渲染 Role/ClusterRole + Binding 并 apply
+1. **创建 ServiceAccount** — 在第一个目标 namespace 下创建 SA
+2. **配置 RBAC** — 在每个指定 namespace 创建 Role + RoleBinding（省略 -n 则创建 ClusterRole + ClusterRoleBinding）
 3. **获取 Token** — 优先使用 `kubectl create token`（k8s 1.24+），回退到创建 Secret
 4. **生成 kubeconfig** — 从当前 context 提取集群 CA 和 API Server 地址，组装配置文件
 
@@ -143,7 +171,8 @@ kubectl get pods
 │   ├── readonly.yaml
 │   ├── developer.yaml
 │   ├── operator.yaml
-│   └── admin.yaml
+│   ├── admin.yaml
+│   └── cicd-runner.yaml
 └── examples/               # 自定义角色示例
     └── custom-role.yaml
 ```
@@ -151,5 +180,5 @@ kubectl get pods
 ## 注意事项
 
 - 生成的 kubeconfig 文件权限为 `600`，包含集群访问 token，请妥善保管
-- ServiceAccount 的 namespace 由 `-n` 参数决定（未指定时 SA 创建在 `default` namespace）
+- 多命名空间时，ServiceAccount 创建在第一个 namespace 下，其余 namespace 通过 RoleBinding 引用该 SA
 - Token 过期后需重新生成，可使用 `--clean` 清理后重新创建
